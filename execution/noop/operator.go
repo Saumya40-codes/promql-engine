@@ -7,6 +7,7 @@ import (
 	"context"
 
 	"github.com/thanos-io/promql-engine/execution/model"
+	"github.com/thanos-io/promql-engine/execution/telemetry"
 	"github.com/thanos-io/promql-engine/query"
 	"github.com/thanos-io/promql-engine/storage/prometheus"
 
@@ -15,6 +16,7 @@ import (
 
 type operator struct {
 	model.VectorOperator
+	telemetry.OperatorTelemetry
 }
 
 func NewOperator(opts *query.Options) model.VectorOperator {
@@ -24,7 +26,9 @@ func NewOperator(opts *query.Options) model.VectorOperator {
 		opts,
 		0, 0, false, 0, 1,
 	)
-	return &operator{VectorOperator: scanner}
+	op := &operator{VectorOperator: scanner}
+	op.OperatorTelemetry = telemetry.NewTelemetry(op, opts)
+	return op
 }
 
 func (o operator) String() string                         { return "[noop]" }

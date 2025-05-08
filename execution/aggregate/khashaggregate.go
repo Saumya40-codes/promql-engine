@@ -260,63 +260,34 @@ func (a *kAggregate) aggregate(t int64, result *[]model.StepVector, k int, ratio
 		}
 
 	case parser.LIMITK:
-		if len(histogramIDs) == 0 {
-			for i, sId := range sampleIDs {
-				sampleHeap := a.inputToHeap[sId]
-				if sampleHeap.Len() < k {
-					heap.Push(sampleHeap, &entry{sId: sId, total: samples[i]})
+		// Reconstruct step vector to get next sample in increasing order of their id
+		sv := model.StepVector{
+			T:            t,
+			SampleIDs:    sampleIDs,
+			HistogramIDs: histogramIDs,
+			Samples:      samples,
+			Histograms:   histograms,
+		}
 
-					if sampleHeap.Len() == k {
-						groupsRemaining--
-					}
-
-					if groupsRemaining == 0 {
-						break
-					}
-				}
+		for {
+			id, h, f, ok := nextSample(&sv)
+			if !ok {
+				break
 			}
-		} else {
-			histogramIndex := 0
-			sampleIndex := 0
 
-			// pick the first 'k' samples based on the increasing order of their ids
-			for histogramIndex < len(histogramIDs) || sampleIndex < len(sampleIDs) {
-				var currentID uint64
-				haveSample := sampleIndex < len(sampleIDs)
-				haveHistogram := histogramIndex < len(histogramIDs)
-
-				if haveSample && haveHistogram {
-					currentID = uint64(min(sampleIDs[sampleIndex], histogramIDs[histogramIndex]))
-				} else if haveHistogram {
-					currentID = histogramIDs[histogramIndex]
+			sampleHeap := a.inputToHeap[id]
+			if sampleHeap.Len() < k {
+				if h == nil {
+					heap.Push(sampleHeap, &entry{sId: id, total: f})
 				} else {
-					currentID = sampleIDs[sampleIndex]
+					heap.Push(sampleHeap, &entry{histId: id, histogramSample: h})
 				}
 
-				sampleHeap := a.inputToHeap[currentID]
-
-				if sampleHeap.Len() < k {
-					if haveHistogram && histogramIDs[histogramIndex] == currentID {
-						heap.Push(sampleHeap, &entry{histId: currentID, histogramSample: histograms[histogramIndex]})
-						histogramIndex++
-					} else if haveSample && sampleIDs[sampleIndex] == currentID {
-						heap.Push(sampleHeap, &entry{sId: currentID, total: samples[sampleIndex]})
-						sampleIndex++
-					}
-
-					if sampleHeap.Len() == k {
-						groupsRemaining--
-					}
-
-					if groupsRemaining == 0 {
-						break
-					}
-				} else {
-					if haveHistogram && histogramIDs[histogramIndex] == currentID {
-						histogramIndex++
-					} else if haveSample && sampleIDs[sampleIndex] == currentID {
-						sampleIndex++
-					}
+				if sampleHeap.Len() == k {
+					groupsRemaining--
+				}
+				if groupsRemaining == 0 {
+					break
 				}
 			}
 		}
@@ -364,6 +335,28 @@ type samplesHeap struct {
 
 func (s samplesHeap) Len() int {
 	return len(s.entries)
+}
+
+func nextSample(sv *model.StepVector) (uint64, *histogram.FloatHistogram, float64, bool) {
+	var f float64
+	var h *histogram.FloatHistogram
+	var id uint64
+	switch {
+	case len(sv.SampleIDs) == 0 && len(sv.HistogramIDs) == 0:
+		return 0, nil, 0, false
+	case len(sv.HistogramIDs) == 0 || (len(sv.SampleIDs) > 0 && sv.SampleIDs[0] < sv.HistogramIDs[0]):
+		id = sv.SampleIDs[0]
+		f = sv.Samples[0]
+		sv.SampleIDs = sv.SampleIDs[1:]
+		sv.Samples = sv.Samples[1:]
+		return id, nil, f, true
+	default:
+		id = sv.HistogramIDs[0]
+		h = sv.Histograms[0]
+		sv.HistogramIDs = sv.HistogramIDs[1:]
+		sv.Histograms = sv.Histograms[1:]
+		return id, h, 0, true
+	}
 }
 
 func (s *samplesHeap) addSamplesToPool(pool *model.VectorPool, stepVector *model.StepVector) {
